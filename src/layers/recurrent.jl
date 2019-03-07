@@ -110,6 +110,70 @@ output fed back into the input each time step.
 """
 RNN(a...; ka...) = Recur(RNNCell(a...; ka...))
 
+
+# CW-RNN
+
+mutable struct CWRNNCell{F,A,V}
+  σ::F
+  Wi::A
+  Wh::A
+  b::V
+  h
+  mask::Array
+  n::Int
+  T::Vector
+end
+
+function CWRNNCell(in::Integer, out::Integer, σ = tanh;
+        init = Flux.glorot_uniform, ts = [1, 2, 4, 8], batchsize = 10)
+  nt = length(ts)
+  nout = nt*out
+  Wi = param(init(nout, in))
+  Wh = param(init(nout, nout))
+  b =  param(init(nout))
+  h =  param(zeros(nout))
+    
+  mask = ones(nout, nout)
+  for i = 2:nt
+        mask[((i-1)*out+1):end, 1:(i-1)*out] .= 0
+  end
+  
+  CWRNNCell(σ, Wi, Wh, b, h, mask, out, ts)
+end
+
+
+function (m::CWRNNCell)(H, x)
+  h = H[1]
+  t = H[2]
+  t += 1
+    
+  nout = m.n * length(m.T)
+  idx = findlast(map(x -> mod(t, x) == 0, m.T))
+  
+  σ, Wi, Wh, b = m.σ, m.Wi, m.Wh, m.b
+  Wh = Wh .* m.mask
+  
+  hnew = σ.(Wh[1:m.n*idx, :] * h .+ Wi[1:m.n*idx, :] * x .+ b[1:m.n*idx])
+  size(hnew, 2) > size(h, 2) && (h = zeros(size(h,1), size(hnew,2)))
+  h = vcat(hnew, h[(m.n*idx+1):end, :])
+    
+  return (h, t), h
+end
+
+hidden(m::CWRNNCell) = (m.h, 0)
+
+@treelike CWRNNCell
+
+"""
+    CWRNN(in::Integer, out::Integer)
+
+A Clockwork RNN - Koutnik et al. 2014 [arXiv](https://arxiv.org/abs/1402.3511)
+The Clockwork RNN (CW-RNN), in which the hidden layer is partitioned into separate modules,
+each processing inputs at its own temporal granularity, making computations only at its prescribed clock rate.
+"""
+CWRNN(args...; kwargs...) = Recur(CWRNNCell(args...; kwargs...))
+
+
 # LSTM
 
 mutable struct LSTMCell{A,V}
